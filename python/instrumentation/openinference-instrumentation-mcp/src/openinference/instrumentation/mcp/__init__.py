@@ -21,6 +21,13 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
     def _instrument(self, **kwargs: Any) -> None:
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
+                "mcp.client.streamable_http", "streamablehttp_client", self._transport_streamable_http_wrapper
+            ),
+            "mcp.client.streamable_http"
+        )
+
+        register_post_import_hook(
+            lambda _: wrap_function_wrapper(
                 "mcp.client.sse", "sse_client", self._transport_wrapper
             ),
             "mcp.client.sse",
@@ -63,11 +70,23 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         unwrap("mcp.server.stdio", "stdio_server")
 
     @asynccontextmanager
+    async def _transport_streamable_http_wrapper(
+            self, wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any
+    ) -> AsyncGenerator[Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter", "GetSessionIdCallback"], None]:
+        async with wrapped(*args, **kwargs) as (read_stream, write_stream, get_session_id_callback):
+            yield (
+                InstrumentedStreamReader(read_stream),
+                InstrumentedStreamWriter(write_stream),
+                get_session_id_callback,
+            )
+
+    @asynccontextmanager
     async def _transport_wrapper(
         self, wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any
     ) -> AsyncGenerator[Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter"], None]:
         async with wrapped(*args, **kwargs) as (read_stream, write_stream):
             yield InstrumentedStreamReader(read_stream), InstrumentedStreamWriter(write_stream)
+
 
     def _base_session_init_wrapper(
         self, wrapped: Callable[..., None], instance: Any, args: Any, kwargs: Any
@@ -91,8 +110,8 @@ class InstrumentedStreamReader(ObjectProxy):  # type: ignore
         return await self.__wrapped__.__aexit__(exc_type, exc_value, traceback)
 
     async def __aiter__(self) -> AsyncGenerator[Any, None]:
-        from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCRequest
+        from mcp.shared.message import SessionMessage
 
         async for item in self.__wrapped__:
             session_message = cast(SessionMessage, item)
@@ -124,8 +143,8 @@ class InstrumentedStreamWriter(ObjectProxy):  # type: ignore
         return await self.__wrapped__.__aexit__(exc_type, exc_value, traceback)
 
     async def send(self, item: Any) -> Any:
-        from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCRequest
+        from mcp.shared.message import SessionMessage
 
         session_message = cast(SessionMessage, item)
         request = session_message.message.root
