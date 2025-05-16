@@ -21,32 +21,39 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
     def _instrument(self, **kwargs: Any) -> None:
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
-                "mcp.client.streamable_http", "streamablehttp_client", self._transport_streamable_http_wrapper
+                "mcp.client.streamable_http", "streamablehttp_client", self._wrap_callback_enabled_transport
             ),
             "mcp.client.streamable_http"
         )
 
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
-                "mcp.client.sse", "sse_client", self._transport_wrapper
+                "mcp.server.streamable_http", "StreamableHTTPServerTransport.connect", self._wrap_standard_transport
+            ),
+            "mcp.server.streamable_http",
+        )
+
+        register_post_import_hook(
+            lambda _: wrap_function_wrapper(
+                "mcp.client.sse", "sse_client", self._wrap_standard_transport
             ),
             "mcp.client.sse",
         )
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
-                "mcp.server.sse", "SseServerTransport.connect_sse", self._transport_wrapper
+                "mcp.server.sse", "SseServerTransport.connect_sse", self._wrap_standard_transport
             ),
             "mcp.server.sse",
         )
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
-                "mcp.client.stdio", "stdio_client", self._transport_wrapper
+                "mcp.client.stdio", "stdio_client", self._wrap_standard_transport
             ),
             "mcp.client.stdio",
         )
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
-                "mcp.server.stdio", "stdio_server", self._transport_wrapper
+                "mcp.server.stdio", "stdio_server", self._wrap_standard_transport
             ),
             "mcp.server.stdio",
         )
@@ -70,9 +77,9 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         unwrap("mcp.server.stdio", "stdio_server")
 
     @asynccontextmanager
-    async def _transport_streamable_http_wrapper(
+    async def _wrap_callback_enabled_transport(
             self, wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any
-    ) -> AsyncGenerator[Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter", "GetSessionIdCallback"], None]:
+    ) -> AsyncGenerator[Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter", Any], None]:
         async with wrapped(*args, **kwargs) as (read_stream, write_stream, get_session_id_callback):
             yield (
                 InstrumentedStreamReader(read_stream),
@@ -81,7 +88,7 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
             )
 
     @asynccontextmanager
-    async def _transport_wrapper(
+    async def _wrap_standard_transport(
         self, wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any
     ) -> AsyncGenerator[Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter"], None]:
         async with wrapped(*args, **kwargs) as (read_stream, write_stream):
@@ -110,8 +117,8 @@ class InstrumentedStreamReader(ObjectProxy):  # type: ignore
         return await self.__wrapped__.__aexit__(exc_type, exc_value, traceback)
 
     async def __aiter__(self) -> AsyncGenerator[Any, None]:
-        from mcp.types import JSONRPCRequest
         from mcp.shared.message import SessionMessage
+        from mcp.types import JSONRPCRequest
 
         async for item in self.__wrapped__:
             session_message = cast(SessionMessage, item)
@@ -143,8 +150,8 @@ class InstrumentedStreamWriter(ObjectProxy):  # type: ignore
         return await self.__wrapped__.__aexit__(exc_type, exc_value, traceback)
 
     async def send(self, item: Any) -> Any:
-        from mcp.types import JSONRPCRequest
         from mcp.shared.message import SessionMessage
+        from mcp.types import JSONRPCRequest
 
         session_message = cast(SessionMessage, item)
         request = session_message.message.root
